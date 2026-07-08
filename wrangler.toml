@@ -100,8 +100,8 @@ crons = ["0 3 * * *"]
 
 [[d1_databases]]
 binding = "vault1"
-database_name = "vault1"
-database_id = "${D1_DATABASE_ID}"
+database_name = "warden-database"
+database_id = "8d3f47ae-1cc3-45ca-89cf-74195bf6cd13"
 migrations_dir = "migrations"
 
 # R2 bucket for file attachments (optional, requires credit card)
@@ -148,9 +148,9 @@ database_id = "${D1_DATABASE_ID_DEV}"
 migrations_dir = "migrations"
 
 # R2 bucket for file attachments in dev environment (optional, requires credit card)
-# [[env.dev.r2_buckets]]
-# binding = "ATTACHMENTS_BUCKET"
-# bucket_name = "warden-attachments-dev"
+ [[env.dev.r2_buckets]]
+ binding = "ATTACHMENTS_BUCKET"
+ bucket_name = "warden-attachments"
 
 # KV namespace for file attachments in dev environment (optional, no credit card required)
 [[env.dev.kv_namespaces]]
