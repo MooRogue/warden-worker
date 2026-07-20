@@ -1,4 +1,8 @@
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    Json,
+};
 use glob_match::glob_match;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -208,6 +212,13 @@ pub async fn register(
         }
     }
 
+    if !payload.has_valid_compat_format() {
+        return Err(AppError::api_json(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "error": "Unexpected RegisterData format" }),
+        ));
+    }
+
     let allowed_emails = env
         .secret("ALLOWED_EMAILS")
         .map_err(|_| AppError::Internal)?;
@@ -222,18 +233,21 @@ pub async fn register(
         return Err(AppError::Unauthorized("Not allowed to signup".to_string()));
     }
 
-    ensure_supported_kdf(
-        payload.kdf,
-        payload.kdf_iterations,
-        payload.kdf_memory,
-        payload.kdf_parallelism,
-    )?;
+    let kdf = payload.kdf();
+    let kdf_type = kdf.kdf;
+    let kdf_iterations = kdf.kdf_iterations;
+    let kdf_memory = kdf.kdf_memory;
+    let kdf_parallelism = kdf.kdf_parallelism;
+    let master_password_hash = payload.master_password_hash().to_owned();
+    let user_symmetric_key = payload.user_symmetric_key().to_owned();
+
+    ensure_supported_kdf(kdf_type, kdf_iterations, kdf_memory, kdf_parallelism)?;
 
     // Generate salt and hash the password with server-side PBKDF2
     let password_salt = generate_salt()?;
     let password_iterations = server_password_iterations(&env) as i32;
     let hashed_password = hash_password_for_storage(
-        &payload.master_password_hash,
+        &master_password_hash,
         &password_salt,
         password_iterations as u32,
     )
@@ -243,8 +257,8 @@ pub async fn register(
     let now = db::now_string();
 
     // Only store kdf_memory and kdf_parallelism for Argon2id, clear for PBKDF2
-    let (kdf_memory, kdf_parallelism) = if payload.kdf == KDF_TYPE_ARGON2ID {
-        (payload.kdf_memory, payload.kdf_parallelism)
+    let (kdf_memory, kdf_parallelism) = if kdf_type == KDF_TYPE_ARGON2ID {
+        (kdf_memory, kdf_parallelism)
     } else {
         (None, None)
     };
@@ -259,11 +273,11 @@ pub async fn register(
         master_password_hint: payload.master_password_hint,
         password_salt: Some(password_salt),
         password_iterations,
-        key: payload.user_symmetric_key,
+        key: user_symmetric_key,
         private_key: payload.user_asymmetric_keys.encrypted_private_key,
         public_key: payload.user_asymmetric_keys.public_key,
-        kdf_type: payload.kdf,
-        kdf_iterations: payload.kdf_iterations,
+        kdf_type,
+        kdf_iterations,
         kdf_memory,
         kdf_parallelism,
         security_stamp: Uuid::new_v4().to_string(),

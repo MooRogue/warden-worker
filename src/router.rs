@@ -183,7 +183,13 @@ pub fn api_router(env: Env) -> Router {
             "/api/sends/{send_id}/remove-password",
             put(sends::remove_password),
         )
-        // Send anonymous access (no auth required)
+        // Send anonymous access with a short-lived Bearer token.
+        .route("/api/sends/access", post(sends::access_send_with_token))
+        .route(
+            "/api/sends/access/file/{file_id}",
+            post(sends::access_file_send_with_token),
+        )
+        // Legacy Send anonymous access (body password behavior is retained).
         .route("/api/sends/access/{access_id}", post(sends::access_send))
         .route(
             "/api/sends/{send_id}/access/file/{file_id}",

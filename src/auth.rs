@@ -14,6 +14,8 @@ use crate::db;
 use crate::error::AppError;
 use crate::models::device::Device;
 
+pub mod send;
+
 pub(crate) const JWT_VALIDATION_LEEWAY_SECS: u64 = 60;
 
 #[derive(Debug, Serialize, Deserialize)]

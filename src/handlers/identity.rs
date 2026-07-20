@@ -1,4 +1,9 @@
-use axum::{extract::State, http::HeaderMap, Form, Json};
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    response::{IntoResponse, Response},
+    Form, Json,
+};
 use chrono::{Duration, Utc};
 use constant_time_eq::constant_time_eq;
 use jwt_compact::AlgorithmExt;
@@ -10,7 +15,11 @@ use worker::Env;
 
 use crate::d1_query;
 use crate::{
-    auth::{jwt_time_options, Claims},
+    auth::{
+        jwt_time_options,
+        send::{create_send_access_token, SEND_ACCESS_TOKEN_TTL_SECS},
+        Claims,
+    },
     client_context::{parse_required_device_type, request_ip_from_headers},
     crypto::{ct_eq, generate_salt, hash_password_for_storage, validate_totp},
     db,
@@ -22,6 +31,7 @@ use crate::{
     models::{
         auth_request::AuthRequest,
         device::{Device, DeviceType},
+        send::{SendAccessTokenResponse, SendDB},
         twofactor::{TwoFactor, TwoFactorType},
         user::User,
     },
@@ -63,6 +73,8 @@ pub struct TokenRequest {
     refresh_token: Option<String>,
     #[serde(rename = "client_id", alias = "clientId")]
     client_id: Option<String>,
+    send_id: Option<String>,
+    password_hash_b64: Option<String>,
     scope: Option<String>,
     #[serde(rename = "authrequest", alias = "authRequest")]
     auth_request: Option<String>,
@@ -218,6 +230,41 @@ fn parse_password_device_request(payload: &TokenRequest) -> Result<DeviceAuthReq
         name: required_field(payload.device_name.as_deref(), "device_name")?,
         r#type: parse_required_device_type(payload.device_type.as_deref(), "device_type")?,
     })
+}
+
+async fn generate_send_access_token_response(
+    env: &Env,
+    db: &crate::db::Db,
+    payload: &TokenRequest,
+) -> Result<Json<SendAccessTokenResponse>, AppError> {
+    let _client_id = required_field(payload.client_id.as_deref(), "client_id")?;
+    let access_id = required_field(payload.send_id.as_deref(), "send_id")?;
+    let mut send = SendDB::find_by_access_id(db, &access_id)
+        .await?
+        .ok_or_else(AppError::send_access_invalid)?;
+
+    if send.validate_access().is_err() {
+        return Err(AppError::send_access_invalid());
+    }
+
+    if send.has_password() {
+        let password_hash_b64 =
+            required_field(payload.password_hash_b64.as_deref(), "password_hash_b64")
+                .map_err(|_| AppError::send_access_password_required())?;
+        if !send.check_password(&password_hash_b64).await? {
+            return Err(AppError::send_access_password_invalid());
+        }
+    }
+
+    send.increment_access_count(db).await?;
+    let access_token = create_send_access_token(env, &send.id)?;
+
+    Ok(Json(SendAccessTokenResponse {
+        access_token,
+        expires_in: SEND_ACCESS_TOKEN_TTL_SECS,
+        token_type: "Bearer".to_string(),
+        scope: "api.send.access".to_string(),
+    }))
 }
 
 async fn authenticate_password_grant(
@@ -502,7 +549,7 @@ pub async fn token(
     State(env): State<Arc<Env>>,
     headers: HeaderMap,
     Form(payload): Form<TokenRequest>,
-) -> Result<Json<TokenResponse>, AppError> {
+) -> Result<Response, AppError> {
     let db = db::get_db(&env)?;
 
     match payload.grant_type.as_str() {
@@ -678,6 +725,7 @@ pub async fn token(
                 &env,
                 two_factor_remember_token,
             )
+            .map(IntoResponse::into_response)
         }
         "refresh_token" => {
             // When a refresh token is invalid or missing we need to respond with an HTTP BadRequest (400)
@@ -725,7 +773,11 @@ pub async fn token(
             let client_id = optional_field(payload.client_id.as_deref())
                 .unwrap_or_else(|| "undefined".to_string());
             generate_tokens_and_response(user, &device, &client_id, &env, None)
+                .map(IntoResponse::into_response)
         }
+        "send_access" => generate_send_access_token_response(env.as_ref(), &db, &payload)
+            .await
+            .map(IntoResponse::into_response),
         _ => Err(AppError::BadRequest("Unsupported grant_type".to_string())),
     }
 }

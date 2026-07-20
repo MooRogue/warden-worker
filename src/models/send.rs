@@ -641,6 +641,15 @@ pub struct SendRequestData {
     pub deletion_date: String,
     pub disabled: Option<bool>,
     pub hide_email: Option<bool>,
+    pub emails: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SendAccessTokenResponse {
+    pub access_token: String,
+    pub expires_in: i64,
+    pub token_type: String,
+    pub scope: String,
 }
 
 const MAX_DELETION_DAYS: i64 = 31;

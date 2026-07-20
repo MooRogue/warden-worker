@@ -147,14 +147,107 @@ pub struct PreloginResponse {
 pub struct RegisterRequest {
     pub name: Option<String>,
     pub email: String,
-    pub master_password_hash: String,
     pub master_password_hint: Option<String>,
-    pub user_symmetric_key: String,
     pub user_asymmetric_keys: KeyData,
-    pub kdf: i32,
-    pub kdf_iterations: i32,
-    pub kdf_memory: Option<i32>, // Argon2 memory parameter (15-1024 MB)
-    pub kdf_parallelism: Option<i32>, // Argon2 parallelism parameter (1-16)
+
+    #[serde(flatten)]
+    compat: RegisterRequestCompat,
+}
+
+impl RegisterRequest {
+    pub(crate) fn master_password_hash(&self) -> &str {
+        self.compat.fold(
+            |legacy| &legacy.master_password_hash,
+            |current| &current.master_password_authentication.hash,
+        )
+    }
+
+    pub(crate) fn user_symmetric_key(&self) -> &str {
+        self.compat.fold(
+            |legacy| &legacy.user_symmetric_key,
+            |current| &current.master_password_unlock.key,
+        )
+    }
+
+    pub(crate) fn kdf(&self) -> &KdfParams {
+        self.compat.fold(
+            |legacy| &legacy.kdf,
+            |current| &current.master_password_authentication.kdf,
+        )
+    }
+
+    /// Newer clients (2026.5.0+) send separate authentication and unlock data. Both KDFs and
+    /// salts must represent the same normalized email before the request is stored.
+    pub(crate) fn has_valid_compat_format(&self) -> bool {
+        match &self.compat {
+            RegisterRequestCompat::Legacy(_) => true,
+            RegisterRequestCompat::Current(current) => {
+                let email = self.email.trim().to_lowercase();
+                current.master_password_authentication.kdf == current.master_password_unlock.kdf
+                    && current.master_password_authentication.salt == email
+                    && current.master_password_unlock.salt == email
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterRequestLegacy {
+    #[serde(flatten)]
+    kdf: KdfParams,
+
+    #[serde(alias = "key")]
+    user_symmetric_key: String,
+
+    master_password_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterRequestCurrent {
+    master_password_authentication: RegisterMasterPasswordAuthentication,
+    master_password_unlock: RegisterMasterPasswordUnlock,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RegisterRequestCompat {
+    Legacy(RegisterRequestLegacy),
+    Current(RegisterRequestCurrent),
+}
+
+impl RegisterRequestCompat {
+    fn fold<'a, T>(
+        &'a self,
+        legacy: impl FnOnce(&'a RegisterRequestLegacy) -> &'a T,
+        current: impl FnOnce(&'a RegisterRequestCurrent) -> &'a T,
+    ) -> &'a T {
+        match self {
+            Self::Legacy(legacy_data) => legacy(legacy_data),
+            Self::Current(current_data) => current(current_data),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterMasterPasswordAuthentication {
+    kdf: KdfParams,
+    salt: String,
+
+    #[serde(alias = "masterPasswordAuthenticationHash")]
+    hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegisterMasterPasswordUnlock {
+    kdf: KdfParams,
+    salt: String,
+
+    #[serde(alias = "masterKeyWrappedUserKey")]
+    key: String,
 }
 
 // For POST /accounts/password-hint request
