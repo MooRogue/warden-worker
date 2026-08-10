@@ -2,7 +2,7 @@ use super::{folder::FolderResponse, user::User};
 use crate::error::AppError;
 use chrono::SecondsFormat;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,7 @@ pub struct Profile {
     pub creation_date: String,
     pub private_key: String,
     pub key: String,
+    pub account_keys: Value,
     #[serde(default)]
     pub organizations: Vec<Value>,
     #[serde(default)]
@@ -39,6 +40,18 @@ impl Profile {
         let creation_date = chrono::DateTime::parse_from_rfc3339(&user.created_at)
             .map_err(|_| AppError::Internal)?
             .to_rfc3339_opts(SecondsFormat::Micros, true);
+
+        let account_keys = json!({
+            "publicKeyEncryptionKeyPair": {
+                "wrappedPrivateKey": user.private_key.clone(),
+                "publicKey": user.public_key.clone(),
+                "signedPublicKey": null,
+                "object": "publicKeyEncryptionKeyPair"
+            },
+            "securityState": null,
+            "signatureKeyPair": null,
+            "object": "privateKeys"
+        });
 
         Ok(Self {
             id: user.id,
@@ -57,6 +70,7 @@ impl Profile {
             creation_date,
             private_key: user.private_key,
             key: user.key,
+            account_keys,
             organizations: Vec::new(),
             providers: Vec::new(),
             provider_organizations: Vec::new(),

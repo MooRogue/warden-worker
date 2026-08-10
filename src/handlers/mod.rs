@@ -17,12 +17,49 @@ pub mod sync;
 pub mod twofactor;
 pub mod webauth;
 
+use axum::http::HeaderMap;
+
+use crate::{client_context::request_ip_from_headers, error::AppError};
+
 /// Shared helper for reading an environment variable into usize.
 pub(crate) fn get_env_usize(env: &worker::Env, var_name: &str, default: usize) -> usize {
     env.var(var_name)
         .ok()
         .and_then(|value| value.to_string().parse::<usize>().ok())
         .unwrap_or(default)
+}
+
+pub(crate) async fn enforce_rate_limit(
+    env: &worker::Env,
+    binding: &str,
+    key: String,
+    error_message: &str,
+) -> Result<(), AppError> {
+    if let Ok(rate_limiter) = env.rate_limiter(binding) {
+        if let Ok(outcome) = rate_limiter.limit(key).await {
+            if !outcome.success {
+                return Err(AppError::TooManyRequests(error_message.to_string()));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn enforce_ip_rate_limit(
+    env: &worker::Env,
+    headers: &HeaderMap,
+    binding: &str,
+    key_prefix: &str,
+    error_message: &str,
+) -> Result<(), AppError> {
+    enforce_rate_limit(
+        env,
+        binding,
+        format!("{key_prefix}:{}", request_ip_from_headers(headers)),
+        error_message,
+    )
+    .await
 }
 
 /// Convenience helper for cipher batch size using IMPORT_BATCH_SIZE.

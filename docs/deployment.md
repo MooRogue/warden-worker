@@ -63,7 +63,7 @@ This page covers the available deployment paths. Pick the one that fits your wor
 
    ```bash
    # Default pinned version (override by exporting BW_WEB_VERSION)
-   BW_WEB_VERSION="${BW_WEB_VERSION:-v2026.4.1}"
+   BW_WEB_VERSION="${BW_WEB_VERSION:-v2026.6.4}"
    if [ "${BW_WEB_VERSION}" = "latest" ]; then
      BW_WEB_VERSION="$(curl -s https://api.github.com/repos/dani-garcia/bw_web_builds/releases/latest | jq -r .tag_name)"
    fi
@@ -160,8 +160,8 @@ You can pin/override the bundled Web Vault (bw_web_builds) version via GitHub Ac
 
 | Variable | Applies to | Default | Example | Notes |
 |----------|------------|---------|---------|-------|
-| `BW_WEB_VERSION` | prod (`main/uat/release*`) | `v2026.4.1` | `v2026.4.1` | Set to `latest` to follow upstream latest release |
-| `BW_WEB_VERSION_DEV` | dev (`dev`) | `v2026.4.1` | `v2026.4.1` | Set to `latest` to follow upstream latest release |
+| `BW_WEB_VERSION` | prod (`main/uat/release*`) | `v2026.6.4` | `v2026.6.4` | Set to `latest` to follow upstream latest release |
+| `BW_WEB_VERSION_DEV` | dev (`dev`) | `v2026.6.4` | `v2026.6.4` | Set to `latest` to follow upstream latest release |
 
 #### Global Equivalent Domains
 
@@ -253,9 +253,9 @@ Because this is a Rust→WASM Worker (the Workers Builds image does not ship Rus
    | Name | Required | Description |
    |------|----------|-------------|
    | `D1_DATABASE_ID` | yes | Production D1 database id (substituted into `wrangler.toml`) |
-   | `BW_WEB_VERSION` | no | `bw_web_builds` tag (default `v2026.4.1`); set `latest` to track upstream |
+   | `BW_WEB_VERSION` | no | `bw_web_builds` tag (default `v2026.6.4`); set `latest` to track upstream |
    | `WRANGLER_VERSION` | no | Pinned wrangler (default `4.82.1`) |
-   | `WORKER_BUILD_VERSION` | no | Pinned worker-build (default `0.8.3`; match the `worker` dep in `Cargo.toml`) |
+   | `WORKER_BUILD_VERSION` | no | Pinned worker-build (default `0.8.5`; match the `worker` dep in `Cargo.toml`) |
    | `R2_NAME` | no | R2 bucket name; enables the `ATTACHMENTS_BUCKET` binding |
    | `SEED_GLOBAL_DOMAINS` | no | `false` to skip seeding global equivalent domains |
    | `GLOBAL_DOMAINS_URL` | no | Pin a specific `global_domains.json` source |

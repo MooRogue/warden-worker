@@ -10,7 +10,10 @@ use crate::models::attachment::AttachmentResponse;
 //   SecureNote = 2,
 //   Card = 3,
 //   Identity = 4,
-//   SshKey = 5
+//   SshKey = 5,
+//   BankAccount = 6,
+//   DriversLicense = 7,
+//   Passport = 8
 
 /// Common cipher type-specific fields shared across multiple cipher structures.
 /// These represent the encrypted content fields that vary based on cipher type.
@@ -29,6 +32,12 @@ pub struct CipherTypeFields {
     pub secure_note: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_key: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_account: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drivers_license: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub passport: Option<Value>,
     // Common fields
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Value>,
@@ -137,10 +146,10 @@ where
 {
     let value = i32::deserialize(deserializer)?;
     match value {
-        1..=5 => Ok(value), // Valid cipher types: Login, SecureNote, Card, Identity, SshKey
+        1..=8 => Ok(value), // Valid cipher types: Login, SecureNote, Card, Identity, SshKey, BankAccount, DriversLicense, Passport
         _ => Err(de::Error::invalid_value(
             de::Unexpected::Signed(value as i64),
-            &"a valid cipher type (1=Login, 2=SecureNote, 3=Card, 4=Identity, 5=SshKey)",
+            &"a valid cipher type (1=Login, 2=SecureNote, 3=Card, 4=Identity, 5=SshKey, 6=BankAccount, 7=DriversLicense, 8=Passport)",
         )),
     }
 }
@@ -308,6 +317,9 @@ impl Serialize for Cipher {
             let mut card = Value::Null;
             let mut identity = Value::Null;
             let mut ssh_key = Value::Null;
+            let mut bank_account = Value::Null;
+            let mut drivers_license = Value::Null;
+            let mut passport = Value::Null;
 
             match self.r#type {
                 1 => login = data_clone.get("login").cloned().unwrap_or(Value::Null),
@@ -315,6 +327,19 @@ impl Serialize for Cipher {
                 3 => card = data_clone.get("card").cloned().unwrap_or(Value::Null),
                 4 => identity = data_clone.get("identity").cloned().unwrap_or(Value::Null),
                 5 => ssh_key = data_clone.get("sshKey").cloned().unwrap_or(Value::Null),
+                6 => {
+                    bank_account = data_clone
+                        .get("bankAccount")
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                }
+                7 => {
+                    drivers_license = data_clone
+                        .get("driversLicense")
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                }
+                8 => passport = data_clone.get("passport").cloned().unwrap_or(Value::Null),
                 _ => {}
             }
 
@@ -323,6 +348,9 @@ impl Serialize for Cipher {
             response_map.insert("card".to_string(), card);
             response_map.insert("identity".to_string(), identity);
             response_map.insert("sshKey".to_string(), ssh_key);
+            response_map.insert("bankAccount".to_string(), bank_account);
+            response_map.insert("driversLicense".to_string(), drivers_license);
+            response_map.insert("passport".to_string(), passport);
         } else {
             response_map.insert("name".to_string(), Value::Null);
             response_map.insert("notes".to_string(), Value::Null);
@@ -334,6 +362,9 @@ impl Serialize for Cipher {
             response_map.insert("card".to_string(), Value::Null);
             response_map.insert("identity".to_string(), Value::Null);
             response_map.insert("sshKey".to_string(), Value::Null);
+            response_map.insert("bankAccount".to_string(), Value::Null);
+            response_map.insert("driversLicense".to_string(), Value::Null);
+            response_map.insert("passport".to_string(), Value::Null);
         }
 
         Value::Object(response_map).serialize(serializer)

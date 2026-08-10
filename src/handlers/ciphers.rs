@@ -1049,6 +1049,9 @@ fn cipher_json_expr(attachments_enabled: bool) -> String {
             'card', CASE WHEN c.type = 3 THEN json_extract(c.data, '$.card') ELSE NULL END,
             'identity', CASE WHEN c.type = 4 THEN json_extract(c.data, '$.identity') ELSE NULL END,
             'sshKey', CASE WHEN c.type = 5 THEN json_extract(c.data, '$.sshKey') ELSE NULL END,
+            'bankAccount', CASE WHEN c.type = 6 THEN json_extract(c.data, '$.bankAccount') ELSE NULL END,
+            'driversLicense', CASE WHEN c.type = 7 THEN json_extract(c.data, '$.driversLicense') ELSE NULL END,
+            'passport', CASE WHEN c.type = 8 THEN json_extract(c.data, '$.passport') ELSE NULL END,
             'key', json_extract(c.data, '$.key')
         )",
         attachments_expr = attachments_expr,

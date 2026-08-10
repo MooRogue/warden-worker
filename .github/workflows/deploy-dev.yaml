@@ -13,12 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Pin tool versions to avoid upstream updates breaking CI
-      WORKER_BUILD_VERSION: "0.8.3"
+      WORKER_BUILD_VERSION: "0.8.5"
       WRANGLER_VERSION: "4.82.1"
       # Web Vault frontend (bw_web_builds) version tag (default pinned; override via GitHub Actions Variables)
-      # - Set repository variable BW_WEB_VERSION_DEV (e.g. v2026.4.1) to override
+      # - Set repository variable BW_WEB_VERSION_DEV (e.g. v2026.6.4) to override
       # - Set to "latest" to follow the latest bw_web_builds release
-      BW_WEB_VERSION: ${{ vars.BW_WEB_VERSION_DEV || 'v2026.4.1' }}
+      BW_WEB_VERSION: ${{ vars.BW_WEB_VERSION_DEV || 'v2026.6.4' }}
 
       # Required for wrangler
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

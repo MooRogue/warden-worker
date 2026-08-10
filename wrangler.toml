@@ -25,7 +25,7 @@ tag = "do_v2"
 new_sqlite_classes = ["NotifyDo"]
 
 [build]
-command = "cargo install --locked -q worker-build --version 0.8.3 && worker-build --release --locked"
+command = "cargo install --locked -q worker-build --version 0.8.5 && worker-build --release --locked"
 
 # Rate limiting configuration for protecting sensitive endpoints
 # See: https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/
@@ -37,6 +37,12 @@ namespace_id = "1001"
 # Allow 5 requests per 60 seconds per key (email or IP)
 # This prevents brute force attacks while allowing legitimate login attempts
 simple = { limit = 5, period = 60 }
+
+[[ratelimits]]
+name = "SEND_ACCESS_RATE_LIMITER"
+namespace_id = "1003"
+# Allow 15 password attempts per minute per IP for public Send access.
+simple = { limit = 15, period = 60 }
 
 # Static assets configuration for serving frontend
 # Frontend files (bw_web_builds) are expected under ./public/web-vault before deployment
@@ -56,6 +62,10 @@ run_worker_first = ["/api/*", "/identity/*", "/notifications/*"]
 # Defaults to 600000, and will be clamped to a minimum of 600000 even if set lower.
 # Existing users whose password iterations are less than this value will be upgraded on login.
 # PASSWORD_ITERATIONS = "600000"
+
+# Base delay in milliseconds before returning invalid credentials for a non-existent login user.
+# Defaults to 550, with a random ±30ms jitter; tune to the observed PBKDF2 duration.
+# LOGIN_MISSING_USER_DELAY_MS = "550"
 
 # Optional: Set the batch size for imports. Defaults to 30 if not set.
 # Set to 0 means no batching (all records imported in a single batch).
@@ -140,6 +150,11 @@ crons = ["0 3 * * *"]
 name = "LOGIN_RATE_LIMITER"
 namespace_id = "1002"
 simple = { limit = 5, period = 60 }
+
+[[env.dev.ratelimits]]
+name = "SEND_ACCESS_RATE_LIMITER"
+namespace_id = "1004"
+simple = { limit = 10, period = 60 }
 
 [[env.dev.d1_databases]]
 binding = "vault1"

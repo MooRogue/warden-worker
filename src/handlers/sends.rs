@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::{
     body::Bytes,
     extract::{Multipart, Path, State},
+    http::HeaderMap,
     Extension, Json,
 };
 use chrono::{TimeZone, Utc};
@@ -21,7 +22,7 @@ use crate::{
     handlers::attachments::{
         attachments_enabled, delete_storage_objects, is_kv_backend, upload_to_storage,
     },
-    handlers::get_env_usize,
+    handlers::{enforce_ip_rate_limit, get_env_usize},
     models::attachment::display_size,
     models::send::{validate_send_dates, SendDB, SendRequestData, SendType, SEND_INACCESSIBLE_MSG},
     notifications::{self, UpdateType},
@@ -792,6 +793,7 @@ pub async fn access_file_send_with_token(
 #[worker::send]
 pub async fn access_send(
     State(env): State<Arc<Env>>,
+    headers: HeaderMap,
     Path(access_id): Path<String>,
     Json(payload): Json<SendAccessRequest>,
 ) -> Result<Json<Value>, AppError> {
@@ -803,6 +805,15 @@ pub async fn access_send(
     send.validate_access()?;
 
     if send.has_password() {
+        enforce_ip_rate_limit(
+            &env,
+            &headers,
+            "SEND_ACCESS_RATE_LIMITER",
+            "send-access",
+            "Too many send password attempts. Please try again later.",
+        )
+        .await?;
+
         let pw = payload
             .password
             .as_deref()
@@ -828,6 +839,7 @@ pub async fn access_send(
 #[worker::send]
 pub async fn access_file_send(
     State(env): State<Arc<Env>>,
+    headers: HeaderMap,
     Path((send_id, file_id)): Path<(String, String)>,
     Extension(BaseUrl(base_url)): Extension<BaseUrl>,
     Json(payload): Json<SendAccessRequest>,
@@ -844,6 +856,15 @@ pub async fn access_file_send(
     }
 
     if send.has_password() {
+        enforce_ip_rate_limit(
+            &env,
+            &headers,
+            "SEND_ACCESS_RATE_LIMITER",
+            "send-access",
+            "Too many send password attempts. Please try again later.",
+        )
+        .await?;
+
         let pw = payload
             .password
             .as_deref()

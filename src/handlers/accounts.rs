@@ -11,7 +11,9 @@ use worker::{D1PreparedStatement, Env};
 
 use crate::d1_query;
 
-use super::{get_batch_size, server_password_iterations, two_factor_enabled};
+use super::{
+    enforce_ip_rate_limit, get_batch_size, server_password_iterations, two_factor_enabled,
+};
 use crate::{
     auth::Claims,
     crypto::{generate_salt, hash_password_for_storage},
@@ -24,8 +26,8 @@ use crate::{
         sync::Profile,
         user::{
             AvatarData, ChangeKdfRequest, ChangePasswordRequest, MasterPasswordUnlockData,
-            PasswordHintRequest, PasswordOrOtpData, PreloginResponse, ProfileData, RegisterRequest,
-            RotateKeyRequest, User,
+            PasswordHintRequest, PasswordOrOtpData, PreloginKdfSettings, PreloginResponse,
+            ProfileData, RegisterRequest, RotateKeyRequest, User,
         },
     },
     notifications::{self, UpdateType},
@@ -136,21 +138,14 @@ pub async fn prelogin(
         .as_str()
         .ok_or_else(|| AppError::BadRequest("Missing email".to_string()))?;
 
-    // Check rate limit using IP address as key to prevent email enumeration attacks
-    if let Ok(rate_limiter) = env.rate_limiter("LOGIN_RATE_LIMITER") {
-        let ip = headers
-            .get("cf-connecting-ip")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        let rate_limit_key = format!("prelogin:{}", ip);
-        if let Ok(outcome) = rate_limiter.limit(rate_limit_key).await {
-            if !outcome.success {
-                return Err(AppError::TooManyRequests(
-                    "Too many requests. Please try again later.".to_string(),
-                ));
-            }
-        }
-    }
+    enforce_ip_rate_limit(
+        &env,
+        &headers,
+        "LOGIN_RATE_LIMITER",
+        "prelogin",
+        "Too many requests. Please try again later.",
+    )
+    .await?;
 
     let db = db::get_db(&env)?;
 
@@ -187,6 +182,13 @@ pub async fn prelogin(
         kdf_iterations: kdf_iterations.unwrap_or(DEFAULT_PBKDF2_ITERATIONS),
         kdf_memory,
         kdf_parallelism,
+        kdf_settings: PreloginKdfSettings {
+            iterations: kdf_iterations.unwrap_or(DEFAULT_PBKDF2_ITERATIONS),
+            kdf_type: kdf_type.unwrap_or(KDF_TYPE_PBKDF2),
+            memory: kdf_memory,
+            parallelism: kdf_parallelism,
+        },
+        salt: None,
     }))
 }
 
@@ -196,21 +198,14 @@ pub async fn register(
     headers: HeaderMap,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<Value>, AppError> {
-    // Check rate limit using IP address as key to prevent mass registration and email enumeration
-    if let Ok(rate_limiter) = env.rate_limiter("LOGIN_RATE_LIMITER") {
-        let ip = headers
-            .get("cf-connecting-ip")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        let rate_limit_key = format!("register:{}", ip);
-        if let Ok(outcome) = rate_limiter.limit(rate_limit_key).await {
-            if !outcome.success {
-                return Err(AppError::TooManyRequests(
-                    "Too many requests. Please try again later.".to_string(),
-                ));
-            }
-        }
-    }
+    enforce_ip_rate_limit(
+        &env,
+        &headers,
+        "LOGIN_RATE_LIMITER",
+        "register",
+        "Too many requests. Please try again later.",
+    )
+    .await?;
 
     if !payload.has_valid_compat_format() {
         return Err(AppError::api_json(
@@ -339,21 +334,14 @@ pub async fn password_hint(
     headers: HeaderMap,
     Json(payload): Json<PasswordHintRequest>,
 ) -> Result<Json<Value>, AppError> {
-    // Basic rate limit by IP to slow down bulk email enumeration attempts.
-    if let Ok(rate_limiter) = env.rate_limiter("LOGIN_RATE_LIMITER") {
-        let ip = headers
-            .get("cf-connecting-ip")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        let rate_limit_key = format!("password-hint:{}", ip);
-        if let Ok(outcome) = rate_limiter.limit(rate_limit_key).await {
-            if !outcome.success {
-                return Err(AppError::TooManyRequests(
-                    "Too many requests. Please try again later.".to_string(),
-                ));
-            }
-        }
-    }
+    enforce_ip_rate_limit(
+        &env,
+        &headers,
+        "LOGIN_RATE_LIMITER",
+        "password-hint",
+        "Too many requests. Please try again later.",
+    )
+    .await?;
 
     const NO_HINT: &str = "Sorry, you have no password hint...";
 

@@ -86,7 +86,7 @@ It's highly recommended to deploy your own instance since the demo can hit the r
 
 ## Frontend (Web Vault)
 
-The frontend is bundled with the Worker using [Cloudflare Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/). The GitHub Actions workflows download a **pinned** [bw_web_builds](https://github.com/dani-garcia/bw_web_builds) (Vaultwarden web vault) release (default: `v2026.4.1`) and deploy it together with the backend. You can override it via GitHub Actions Variables (`BW_WEB_VERSION` for prod, `BW_WEB_VERSION_DEV` for dev), or set it to `latest` to follow upstream.
+The frontend is bundled with the Worker using [Cloudflare Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/). The GitHub Actions workflows download a **pinned** [bw_web_builds](https://github.com/dani-garcia/bw_web_builds) (Vaultwarden web vault) release (default: `v2026.6.4`) and deploy it together with the backend. You can override it via GitHub Actions Variables (`BW_WEB_VERSION` for prod, `BW_WEB_VERSION_DEV` for dev), or set it to `latest` to follow upstream.
 
 **How it works:**
 - Static files (HTML, CSS, JS) are served directly by Cloudflare's edge network.
@@ -143,7 +143,9 @@ This project includes rate limiting powered by [Cloudflare's Rate Limiting API](
 
 | Endpoint | Rate Limit | Key Type | Purpose |
 |----------|------------|----------|---------|
-| `/identity/connect/token` | 5 req/min | Email address | Prevent password brute force |
+| `/identity/connect/token` (password grant) | 5 req/min per email + 5 req/min per IP | Email + IP address | Prevent password brute force and credential stuffing |
+| `/identity/connect/token` (send access) | 15 req/min | IP address | Prevent Send password brute force |
+| `/api/sends/access/*` (password protected) | 10 req/min | IP address | Prevent Send password brute force |
 | `/api/accounts/register` | 5 req/min | IP address | Prevent mass registration & email enumeration |
 | `/api/accounts/prelogin` | 5 req/min | IP address | Prevent email enumeration |
 
@@ -155,6 +157,12 @@ name = "LOGIN_RATE_LIMITER"
 namespace_id = "1001"
 # Adjust limit (requests) and period (10 or 60 seconds)
 simple = { limit = 5, period = 60 }
+
+[[ratelimits]]
+name = "SEND_ACCESS_RATE_LIMITER"
+namespace_id = "1003"
+# Public Send password checks use a slightly wider IP limit.
+simple = { limit = 10, period = 60 }
 ```
 
 > [!NOTE]
