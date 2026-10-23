@@ -1,407 +1,66 @@
-name: Backup D1 Database (S3/WebDAV)
+name: Backup D1 Database (encrypted)
 permissions:
-    contents: read
-
+  contents: read
 on:
-    schedule:
-        # Run daily at UTC 04:00 (1 hour after the auto cleanup task)
-        - cron: "0 4 * * *"
-    workflow_dispatch:
-        inputs:
-            environment:
-                description: "Select the environment to backup"
-                required: true
-                default: "production"
-                type: choice
-                options:
-                    - production
-                    - dev
-
-env:
-    BACKUP_RETENTION_DAYS: ${{ secrets.BACKUP_RETENTION_DAYS || 30 }}
-
+  schedule:
+    - cron: "0 4 * * *"
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/backup-d1.yaml
+      - scripts/backup-d1.sh
+      - scripts/validate-backup.py
+      - docs/backup-recipient.pem
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to back up
+        required: true
+        default: production
+        type: choice
+        options: [production, dev]
+concurrency:
+  group: d1-backup-${{ github.event.inputs.environment || 'production' }}
+  cancel-in-progress: false
 jobs:
-    backup-production:
-        name: Backup Production D1 Database
-        runs-on: ubuntu-latest
-        if: github.event_name == 'schedule' || github.event.inputs.environment == 'production'
-
-        steps:
-            - name: Check backup backends availability
-              id: backends
-              env:
-                  S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-                  S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-                  S3_BUCKET: ${{ secrets.S3_BUCKET }}
-                  S3_REGION: ${{ secrets.S3_REGION }}
-                  WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
-                  WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
-                  WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
-              run: |
-                  # Check S3 backend
-                  if [[ -n "$S3_ACCESS_KEY_ID" && -n "$S3_SECRET_ACCESS_KEY" && -n "$S3_BUCKET" && -n "$S3_REGION" ]]; then
-                    echo "S3_ENABLED=true" >> $GITHUB_OUTPUT
-                    echo "✅ S3 backend: enabled"
-                  else
-                    echo "S3_ENABLED=false" >> $GITHUB_OUTPUT
-                    echo "⚠️ S3 backend: disabled (missing credentials)"
-                  fi
-                  
-                  # Check WebDAV backend
-                  if [[ -n "$WEBDAV_URL" && -n "$WEBDAV_USER" && -n "$WEBDAV_PASSWORD" ]]; then
-                    echo "WEBDAV_ENABLED=true" >> $GITHUB_OUTPUT
-                    echo "✅ WebDAV backend: enabled"
-                  else
-                    echo "WEBDAV_ENABLED=false" >> $GITHUB_OUTPUT
-                    echo "⚠️ WebDAV backend: disabled (missing credentials)"
-                  fi
-
-            - name: Get current date
-              id: date
-              run: echo "date=$(date +'%Y-%m-%d_%H-%M-%S')" >> $GITHUB_OUTPUT
-
-            - name: Install wrangler
-              run: npm install -g wrangler
-
-            - name: Get D1 Database Name
-              id: db_name
-              env:
-                  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-                  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-              run: |
-                  DB_NAME=$(npx wrangler d1 list --json | jq -r '.[] | select(.uuid == "${{ secrets.D1_DATABASE_ID }}") | .name')
-                  if [ -z "$DB_NAME" ]; then
-                    echo "❌ Error: Could not find database with D1_DATABASE_ID secret"
-                    exit 1
-                  fi
-                  echo "Found database name"
-                  echo "db_name=$DB_NAME" >> $GITHUB_OUTPUT
-
-            - name: Export D1 Database
-              env:
-                  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-                  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-              run: |
-                  echo "Exporting D1 database..."
-                  npx wrangler d1 export "${{ steps.db_name.outputs.db_name }}" \
-                    --remote \
-                    --output=backup.sql
-                  
-                  # Compress backup file
-                  gzip backup.sql
-                  
-                  echo "Backup compressed: backup.sql.gz"
-                  ls -lh backup.sql.gz
-
-            - name: Encrypt backup (optional)
-              env:
-                  BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-              run: |
-                  if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
-                    echo "Encrypting backup with AES-256..."
-                    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
-                      -in backup.sql.gz \
-                      -out "vault1_prod_${{ steps.date.outputs.date }}.sql.gz.enc" \
-                      -pass pass:"$BACKUP_ENCRYPTION_KEY"
-                    rm backup.sql.gz
-                    echo "✅ Backup encrypted: vault1_prod_${{ steps.date.outputs.date }}.sql.gz.enc"
-                    ls -lh *.enc
-                  else
-                    echo "⚠️ BACKUP_ENCRYPTION_KEY not set, skipping encryption"
-                    mv backup.sql.gz "vault1_prod_${{ steps.date.outputs.date }}.sql.gz"
-                    echo "Backup file: vault1_prod_${{ steps.date.outputs.date }}.sql.gz"
-                    ls -lh *.sql.gz
-                  fi
-
-            - name: Upload to S3
-              if: steps.backends.outputs.S3_ENABLED == 'true'
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-                  AWS_DEFAULT_REGION: ${{ secrets.S3_REGION }}
-                  BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-              run: |
-                  # Set custom S3 endpoint if configured (for S3-compatible services like MinIO, R2, etc.)
-                  ENDPOINT_FLAG=""
-                  if [ -n "${{ secrets.S3_ENDPOINT }}" ]; then
-                    ENDPOINT_FLAG="--endpoint-url ${{ secrets.S3_ENDPOINT }}"
-                  fi
-
-                  # Choose file extension based on encryption status
-                  if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
-                    BACKUP_FILE="vault1_prod_${{ steps.date.outputs.date }}.sql.gz.enc"
-                  else
-                    BACKUP_FILE="vault1_prod_${{ steps.date.outputs.date }}.sql.gz"
-                  fi
-                  
-                  aws s3 cp "$BACKUP_FILE" \
-                    "s3://${{ secrets.S3_BUCKET }}/warden-worker/production/" \
-                    $ENDPOINT_FLAG
-                  
-                  echo "✅ Backup uploaded to S3: s3://${{ secrets.S3_BUCKET }}/warden-worker/production/$BACKUP_FILE"
-
-            - name: Cleanup old S3 backups
-              if: steps.backends.outputs.S3_ENABLED == 'true'
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-                  AWS_DEFAULT_REGION: ${{ secrets.S3_REGION }}
-              run: |
-                  ENDPOINT_FLAG=""
-                  if [ -n "${{ secrets.S3_ENDPOINT }}" ]; then
-                    ENDPOINT_FLAG="--endpoint-url ${{ secrets.S3_ENDPOINT }}"
-                  fi
-                  
-                  # Find and delete backup files older than retention period
-                  CUTOFF_DATE=$(date -d "-${{ env.BACKUP_RETENTION_DAYS }} days" +%Y-%m-%d)
-                  echo "Cleaning up backups older than $CUTOFF_DATE..."
-                  
-                  aws s3 ls "s3://${{ secrets.S3_BUCKET }}/warden-worker/production/" $ENDPOINT_FLAG | while read -r line; do
-                    FILE_DATE=$(echo "$line" | awk '{print $1}')
-                    FILE_NAME=$(echo "$line" | awk '{print $4}')
-                    if [[ "$FILE_DATE" < "$CUTOFF_DATE" ]] && [[ -n "$FILE_NAME" ]]; then
-                      echo "Deleting old backup: $FILE_NAME"
-                      aws s3 rm "s3://${{ secrets.S3_BUCKET }}/warden-worker/production/$FILE_NAME" $ENDPOINT_FLAG
-                    fi
-                  done
-                  
-                  echo "✅ Cleanup completed"
-
-            - name: Setup rclone
-              if: steps.backends.outputs.WEBDAV_ENABLED == 'true'
-              uses: AnimMouse/setup-rclone@26ef2133e09fd383329a1d4c1fbe6a71db1976c9 # v1
-
-            - name: Configure rclone (WebDAV)
-              if: steps.backends.outputs.WEBDAV_ENABLED == 'true'
-              env:
-                  WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
-                  WEBDAV_VENDOR: ${{ secrets.WEBDAV_VENDOR || 'other' }}
-                  WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
-                  WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
-              run: |
-                  mkdir -p ~/.config/rclone
-                  RCLONE_WEBDAV_PASS="$(rclone obscure "$WEBDAV_PASSWORD")"
-
-                  cat > ~/.config/rclone/rclone.conf <<EOF
-                  [webdav]
-                  type = webdav
-                  url = $WEBDAV_URL
-                  vendor = $WEBDAV_VENDOR
-                  user = $WEBDAV_USER
-                  pass = $RCLONE_WEBDAV_PASS
-                  EOF
-
-            - name: Upload to WebDAV
-              if: steps.backends.outputs.WEBDAV_ENABLED == 'true'
-              env:
-                  BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-                  WEBDAV_BASE_PATH: ${{ secrets.WEBDAV_BASE_PATH || 'warden-worker' }}
-              run: |
-                  if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
-                    BACKUP_FILE="vault1_prod_${{ steps.date.outputs.date }}.sql.gz.enc"
-                  else
-                    BACKUP_FILE="vault1_prod_${{ steps.date.outputs.date }}.sql.gz"
-                  fi
-                  
-                  rclone mkdir "webdav:${WEBDAV_BASE_PATH}" || true
-                  rclone mkdir "webdav:${WEBDAV_BASE_PATH}/production" || true
-                  
-                  rclone copyto "$BACKUP_FILE" "webdav:${WEBDAV_BASE_PATH}/production/$BACKUP_FILE"
-
-                  echo "✅ Backup uploaded to WebDAV: webdav:${WEBDAV_BASE_PATH}/production/$BACKUP_FILE"
-
-                  # Cleanup old backups
-                  rclone delete "webdav:${WEBDAV_BASE_PATH}/production/" -v --min-age ${{ env.BACKUP_RETENTION_DAYS }}d
-
-                  echo "✅ Cleanup completed"
-
-    backup-dev:
-        name: Backup Dev D1 Database
-        runs-on: ubuntu-latest
-        if: github.event.inputs.environment == 'dev'
-
-        steps:
-            - name: Check backup backends availability
-              id: backends
-              env:
-                  S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-                  S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-                  S3_BUCKET: ${{ secrets.S3_BUCKET }}
-                  S3_REGION: ${{ secrets.S3_REGION }}
-                  WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
-                  WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
-                  WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
-              run: |
-                  # Check S3 backend
-                  if [[ -n "$S3_ACCESS_KEY_ID" && -n "$S3_SECRET_ACCESS_KEY" && -n "$S3_BUCKET" && -n "$S3_REGION" ]]; then
-                    echo "S3_ENABLED=true" >> $GITHUB_OUTPUT
-                    echo "✅ S3 backend: enabled"
-                  else
-                    echo "S3_ENABLED=false" >> $GITHUB_OUTPUT
-                    echo "⚠️ S3 backend: disabled (missing credentials)"
-                  fi
-                  
-                  # Check WebDAV backend
-                  if [[ -n "$WEBDAV_URL" && -n "$WEBDAV_USER" && -n "$WEBDAV_PASSWORD" ]]; then
-                    echo "WEBDAV_ENABLED=true" >> $GITHUB_OUTPUT
-                    echo "✅ WebDAV backend: enabled"
-                  else
-                    echo "WEBDAV_ENABLED=false" >> $GITHUB_OUTPUT
-                    echo "⚠️ WebDAV backend: disabled (missing credentials)"
-                  fi
-
-            - name: Get current date
-              id: date
-              run: echo "date=$(date +'%Y-%m-%d_%H-%M-%S')" >> $GITHUB_OUTPUT
-
-            - name: Install wrangler
-              run: npm install -g wrangler
-
-            - name: Get D1 Database Name (Dev)
-              id: db_name
-              env:
-                  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-                  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-              run: |
-                  DB_NAME=$(npx wrangler d1 list --json | jq -r '.[] | select(.uuid == "${{ secrets.D1_DATABASE_ID_DEV }}") | .name')
-                  if [ -z "$DB_NAME" ]; then
-                    echo "❌ Error: Could not find database with D1_DATABASE_ID_DEV secret"
-                    exit 1
-                  fi
-                  echo "Found database name"
-                  echo "db_name=$DB_NAME" >> $GITHUB_OUTPUT
-
-            - name: Export D1 Database (Dev)
-              env:
-                  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-                  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-              run: |
-                  echo "Exporting D1 dev database..."
-                  npx wrangler d1 export "${{ steps.db_name.outputs.db_name }}" \
-                    --remote \
-                    --output=backup.sql
-                  
-                  gzip backup.sql
-                  
-                  echo "Backup compressed: backup.sql.gz"
-                  ls -lh backup.sql.gz
-
-            - name: Encrypt backup (optional)
-              env:
-                  BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-              run: |
-                  if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
-                    echo "Encrypting backup with AES-256..."
-                    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 100000 \
-                      -in backup.sql.gz \
-                      -out "vault1_dev_${{ steps.date.outputs.date }}.sql.gz.enc" \
-                      -pass pass:"$BACKUP_ENCRYPTION_KEY"
-                    rm backup.sql.gz
-                    echo "✅ Backup encrypted: vault1_dev_${{ steps.date.outputs.date }}.sql.gz.enc"
-                    ls -lh *.enc
-                  else
-                    echo "⚠️ BACKUP_ENCRYPTION_KEY not set, skipping encryption"
-                    mv backup.sql.gz "vault1_dev_${{ steps.date.outputs.date }}.sql.gz"
-                    echo "Backup file: vault1_dev_${{ steps.date.outputs.date }}.sql.gz"
-                    ls -lh *.sql.gz
-                  fi
-
-            - name: Upload to S3
-              if: steps.backends.outputs.S3_ENABLED == 'true'
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-                  AWS_DEFAULT_REGION: ${{ secrets.S3_REGION }}
-                  BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-              run: |
-                  ENDPOINT_FLAG=""
-                  if [ -n "${{ secrets.S3_ENDPOINT }}" ]; then
-                    ENDPOINT_FLAG="--endpoint-url ${{ secrets.S3_ENDPOINT }}"
-                  fi
-
-                  # Choose file extension based on encryption status
-                  if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
-                    BACKUP_FILE="vault1_dev_${{ steps.date.outputs.date }}.sql.gz.enc"
-                  else
-                    BACKUP_FILE="vault1_dev_${{ steps.date.outputs.date }}.sql.gz"
-                  fi
-                  
-                  aws s3 cp "$BACKUP_FILE" \
-                    "s3://${{ secrets.S3_BUCKET }}/warden-worker/dev/" \
-                    $ENDPOINT_FLAG
-                  
-                  echo "✅ Backup uploaded to S3: s3://${{ secrets.S3_BUCKET }}/warden-worker/dev/$BACKUP_FILE"
-
-            - name: Cleanup old S3 backups
-              if: steps.backends.outputs.S3_ENABLED == 'true'
-              env:
-                  AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
-                  AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
-                  AWS_DEFAULT_REGION: ${{ secrets.S3_REGION }}
-              run: |
-                  ENDPOINT_FLAG=""
-                  if [ -n "${{ secrets.S3_ENDPOINT }}" ]; then
-                    ENDPOINT_FLAG="--endpoint-url ${{ secrets.S3_ENDPOINT }}"
-                  fi
-                  
-                  CUTOFF_DATE=$(date -d "-${{ env.BACKUP_RETENTION_DAYS }} days" +%Y-%m-%d)
-                  echo "Cleaning up backups older than $CUTOFF_DATE..."
-                  
-                  aws s3 ls "s3://${{ secrets.S3_BUCKET }}/warden-worker/dev/" $ENDPOINT_FLAG | while read -r line; do
-                    FILE_DATE=$(echo "$line" | awk '{print $1}')
-                    FILE_NAME=$(echo "$line" | awk '{print $4}')
-                    if [[ "$FILE_DATE" < "$CUTOFF_DATE" ]] && [[ -n "$FILE_NAME" ]]; then
-                      echo "Deleting old backup: $FILE_NAME"
-                      aws s3 rm "s3://${{ secrets.S3_BUCKET }}/warden-worker/dev/$FILE_NAME" $ENDPOINT_FLAG
-                    fi
-                  done
-                  
-                  echo "✅ Cleanup completed"
-
-            - name: Setup rclone
-              if: steps.backends.outputs.WEBDAV_ENABLED == 'true'
-              uses: AnimMouse/setup-rclone@26ef2133e09fd383329a1d4c1fbe6a71db1976c9 # v1
-
-            - name: Configure rclone (WebDAV)
-              if: steps.backends.outputs.WEBDAV_ENABLED == 'true'
-              env:
-                  WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
-                  WEBDAV_VENDOR: ${{ secrets.WEBDAV_VENDOR || 'other' }}
-                  WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
-                  WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
-              run: |
-                  mkdir -p ~/.config/rclone
-                  RCLONE_WEBDAV_PASS="$(rclone obscure "$WEBDAV_PASSWORD")"
-
-                  cat > ~/.config/rclone/rclone.conf <<EOF
-                  [webdav]
-                  type = webdav
-                  url = $WEBDAV_URL
-                  vendor = $WEBDAV_VENDOR
-                  user = $WEBDAV_USER
-                  pass = $RCLONE_WEBDAV_PASS
-                  EOF
-
-            - name: Upload to WebDAV
-              if: steps.backends.outputs.WEBDAV_ENABLED == 'true'
-              env:
-                  BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-                  WEBDAV_BASE_PATH: ${{ secrets.WEBDAV_BASE_PATH || 'warden-worker' }}
-              run: |
-                  if [ -n "$BACKUP_ENCRYPTION_KEY" ]; then
-                    BACKUP_FILE="vault1_dev_${{ steps.date.outputs.date }}.sql.gz.enc"
-                  else
-                    BACKUP_FILE="vault1_dev_${{ steps.date.outputs.date }}.sql.gz"
-                  fi
-                  
-                  rclone mkdir "webdav:${WEBDAV_BASE_PATH}" || true
-                  rclone mkdir "webdav:${WEBDAV_BASE_PATH}/dev" || true
-
-                  rclone copyto "$BACKUP_FILE" "webdav:${WEBDAV_BASE_PATH}/dev/$BACKUP_FILE"
-
-                  echo "✅ Backup uploaded to WebDAV: webdav:${WEBDAV_BASE_PATH}/dev/$BACKUP_FILE"
-
-                  # Cleanup old backups
-                  rclone delete "webdav:${WEBDAV_BASE_PATH}/dev/" -v --min-age ${{ env.BACKUP_RETENTION_DAYS }}d
-
-                  echo "✅ Cleanup completed"
+  backup:
+    name: Export, validate, encrypt and retain D1 backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      D1_DATABASE_ID_PRODUCTION: ${{ secrets.D1_DATABASE_ID }}
+      D1_DATABASE_ID_DEV: ${{ secrets.D1_DATABASE_ID_DEV }}
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+        with:
+          node-version: "24"
+      - name: Install pinned Wrangler
+        run: npm install -g wrangler@4.82.1
+      - name: Export, restore-check and encrypt
+        run: bash scripts/backup-d1.sh
+      - name: Save encrypted backup (required)
+        id: archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: warden-d1-${{ env.ENVIRONMENT }}-${{ github.run_id }}
+          path: |
+            backup-output/*.cms
+            backup-output/SHA256SUMS
+            backup-output/manifest.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Confirm retained artifact
+        env:
+          ARTIFACT_ID: ${{ steps.archive.outputs.artifact-id }}
+        run: |
+          test -n "$ARTIFACT_ID"
+          echo "Encrypted backup retained as artifact $ARTIFACT_ID (30 days)." >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove plaintext on failure too
+        if: always()
+        run: rm -f backup.sql backup.sql.gz backup-restore.sqlite

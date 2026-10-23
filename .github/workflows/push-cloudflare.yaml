@@ -5,6 +5,14 @@ permissions:
 on:
   push:
     branches: [main, uat, release*]
+    paths-ignore:
+      - .github/workflows/backup-d1.yaml
+      - scripts/backup-d1.sh
+      - scripts/validate-backup.py
+      - scripts/test_backup.py
+      - docs/backup-recipient.pem
+      - docs/backup-recovery.md
+      - .github/workflows/push-cloudflare.yaml
   workflow_dispatch:
 
 jobs:
