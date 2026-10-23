@@ -14,6 +14,9 @@ Private recovery key (not committed and never available to GitHub):
 Preserve this key independently before removing infra backups; loss of the key
 means loss of access to all backups encrypted to this certificate. Rotate the
 public certificate before its ten-year expiry, retaining every older private key.
+An additional root-only local recovery-key copy is at
+`/var/lib/warden-backup-recovery/recovery-private-20261023.pem` on Overwatch, so a
+Synology storage failure alone does not remove the only key.
 
 Download the selected `warden-d1-production-RUN_ID` artifact into a private local
 directory and unpack it. Verify `sha256sum -c SHA256SUMS`. Then decrypt locally:
@@ -33,3 +36,13 @@ does not modify the production database. A real production restore requires
 separate explicit authorization. GitHub artifact retention is not proof of a
 second independently stored backup; copy verified encrypted artifacts to infra
 backup storage when checking recovery.
+
+## First end-to-end verification
+
+Run `39949580404` on 2026-10-23 created artifact `12499174102` successfully.
+The downloaded archive passed SHA-256 verification, CMS decryption, gzip checks,
+and a disposable SQLite restore with 13 tables and `quick_check=ok`. SQL size was
+34,738 bytes; ciphertext size was 11,790 bytes. The local restore matched the
+workflow validation manifest. No application deployment or production restore
+occurred. Plaintext test outputs were removed. Encrypted copy and recovery proof:
+`/mnt/backups/infra.backup/warden-worker/recovery-20261023/verified-39949580404/`.
